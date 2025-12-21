@@ -1,85 +1,89 @@
-/*
-  LilyGo T3 V1 LoRa Bridge (Updated for V1 Pinout)
-  ------------------------------------------------
-  BOARD: TTGO LoRa32-OLED (Select in Arduino IDE)
-  
-  WIRING RECAP:
-  - LilyGo Pin 25 <--> Pi Pin 8 (TX)
-  - LilyGo Pin 23 <--> Pi Pin 10 (RX)
-  - LilyGo GND    <--> Pi Pin 6 (GND)
-*/
-
 #include <SPI.h>
 #include <LoRa.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
-// --- HARDWARE CONFIG (Standard T3 V1) ---
-#define SCK     5
-#define MISO    19
-#define MOSI    27
-#define SS      18
-#define RST     14
-#define DIO0    26
+// Pins for LilyGO T3 v1.6.1
+#define SCK 5
+#define MISO 19
+#define MOSI 27
+#define SS 18
+#define RST 14
+#define DI0 26
+#define BAND 915E6 // Change to 433E6 or 868E6 depending on your region!
 
-// --- UART CONFIG (UPDATED) ---
-// We are using IO25 and IO23 because 16/17 are missing on V1
-#define RX_PIN  4   // Connect to Pi TX (Pin 8)
-#define TX_PIN  13  // Connect to Pi RX (Pin 10)
-#define BAUDRATE 115200
-// --- LORA CONFIG (UPDATED) ---
-// Your board is 915MHz version.
-#define BAND    915E6 
+// OLED Pins
+#define OLED_SDA 4
+#define OLED_SCL 15
+#define OLED_RST 16
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
 
-HardwareSerial SerialPi(2); // Use UART2
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RST);
 
 void setup() {
-  // 1. Debug Serial (USB to PC)
   Serial.begin(115200);
-  Serial.println("System Init...");
+  
+  // Setup OLED
+  pinMode(OLED_RST, OUTPUT);
+  digitalWrite(OLED_RST, LOW); delay(20); digitalWrite(OLED_RST, HIGH);
+  Wire.begin(OLED_SDA, OLED_SCL);
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3c)) { 
+    Serial.println(F("SSD1306 allocation failed"));
+  }
+  display.clearDisplay();
+  display.setTextColor(WHITE);
+  display.setCursor(0,0);
+  display.println("LoRa Bridge Ready");
+  display.display();
 
-  // 2. Pi Serial (UART to Raspberry Pi)
-  // This tells the ESP32 to route Serial2 to pins 25 and 23
-  SerialPi.begin(BAUDRATE, SERIAL_8N1, RX_PIN, TX_PIN); 
-
-  // 3. LoRa Init
+  // Setup LoRa
   SPI.begin(SCK, MISO, MOSI, SS);
-  LoRa.setPins(SS, RST, DIO0);
+  LoRa.setPins(SS, RST, DI0);
   
   if (!LoRa.begin(BAND)) {
-    Serial.println("LoRa Init Failed! Check frequency/antenna.");
+    Serial.println("Starting LoRa failed!");
     while (1);
   }
-
-  // Reliability Settings
-  LoRa.setSpreadingFactor(9);
-  LoRa.setSignalBandwidth(125E3);
-  LoRa.setCodingRate4(5);
-  LoRa.setTxPower(20);
-
-  Serial.println("LoRa Bridge Active (915MHz).");
-  Serial.println("Connect Pi TX to IO25, Pi RX to IO23.");
+  Serial.println("LoRa Initialized");
 }
 
 void loop() {
-  // TASK A: Pi -> LoRa
-  if (SerialPi.available()) {
-    String data = SerialPi.readStringUntil('\n');
-    if (data.length() > 0) {
-      LoRa.beginPacket();
-      LoRa.print(data);
-      LoRa.print("\n");
-      LoRa.endPacket();
-      Serial.println("TX >> " + data); // Show on USB debug
-    }
+  // 1. Check if Pi sent data via Serial to transmit over LoRa
+  if (Serial.available()) {
+    // Read packet size (first byte) or assume fixed stream
+    // For simplicity, we read as much as available into a buffer
+    int len = Serial.available();
+    byte buffer[250]; // LoRa packet limit is 255 bytes
+    if (len > 240) len = 240; // Safety cap
+    
+    Serial.readBytes(buffer, len);
+    
+    LoRa.beginPacket();
+    LoRa.write(buffer, len);
+    LoRa.endPacket();
+    
+    display.clearDisplay();
+    display.setCursor(0,0);
+    display.print("TX: "); display.print(len); display.println(" bytes");
+    display.display();
+    
+    // Send acknowledgement back to Pi so it knows it can send the next chunk
+    Serial.println("ACK"); 
   }
 
-  // TASK B: LoRa -> Pi
+  // 2. Check if LoRa received data to send to Pi via Serial
   int packetSize = LoRa.parsePacket();
   if (packetSize) {
-    String incoming = "";
     while (LoRa.available()) {
-      incoming += (char)LoRa.read();
+      byte b = LoRa.read();
+      Serial.write(b); // Pass byte directly to Pi
     }
-    SerialPi.println(incoming);      // Send to Pi
-    Serial.println("RX << " + incoming); // Show on USB debug
+    
+    display.clearDisplay();
+    display.setCursor(0,0);
+    display.print("RX: "); display.print(packetSize); display.println(" bytes");
+    display.display();
   }
 }

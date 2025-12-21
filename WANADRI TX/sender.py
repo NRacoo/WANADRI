@@ -1,86 +1,61 @@
-#!/usr/bin/env python3
 import serial
 import time
 import os
-import json
-import base64
-import math
-import random
-import zlib
 import sys
-from PIL import Image
 
-# --- CONFIG ---
-PORT = "/dev/serial0"
-BAUD = 115200
-NODE_ID = "N1"
-CHUNK_SIZE = 150        # Keep small for LoRa
-DELAY = 0.5             # Airtime buffer (Seconds)
+# CONFIGURATION
+SERIAL_PORT = '/dev/ttyUSB0' # Check with ls /dev/tty*
+BAUD_RATE = 115200
+IMAGE_PATH = 'image.jpg'
+CHUNK_SIZE = 200 # Bytes per packet
 
-def compress_image(input_path, output_path="temp.jpg"):
-    """Resize image to 320px width (Crucial for LoRa speed)"""
-    try:
-        img = Image.open(input_path)
-        w_percent = (320 / float(img.size[0]))
-        h_size = int((float(img.size[1]) * float(w_percent)))
-        img = img.resize((320, h_size), Image.Resampling.LANCZOS)
-        img.save(output_path, "JPEG", quality=50)
-        return True
-    except Exception as e:
-        print(f"Error resizing: {e}")
-        return False
-
-def send_file(serial_conn, file_path):
-    if not os.path.exists(file_path):
-        print("File not found")
+def send_image(image_path):
+    if not os.path.exists(image_path):
+        print("Image not found")
         return
 
-    filename = os.path.basename(file_path)
-    file_id = str(random.randint(1000, 9999))
+    # Initialize Serial
+    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+    time.sleep(2) # Wait for ESP32 to reset
+
+    # Read image in binary
+    with open(image_path, "rb") as f:
+        img_data = f.read()
+
+    total_size = len(img_data)
+    total_packets = (total_size // CHUNK_SIZE) + 1
+    print(f"Sending {total_size} bytes in {total_packets} packets...")
+
+    # Send a specialized 'START' packet with file size
+    start_msg = f"START:{total_size}".encode()
+    ser.write(start_msg)
     
-    with open(file_path, "rb") as f:
-        file_bytes = f.read()
+    # Wait for ESP32 to bridge it and return ACK
+    while True:
+        if ser.readline().strip() == b"ACK":
+            break
 
-    total_chunks = math.ceil(len(file_bytes) / CHUNK_SIZE)
-    print(f"Sending {filename} (ID:{file_id}) - {total_chunks} Chunks")
-
-    for idx in range(total_chunks):
-        # 1. Slice Data
-        chunk_data = file_bytes[idx*CHUNK_SIZE : (idx+1)*CHUNK_SIZE]
-
-        # 2. Build Header: N1|filename|fileid|idx|total|crc|
-        crc = zlib.crc32(chunk_data) & 0xFFFFFFFF
-        header = f"{NODE_ID}|{filename}|{file_id}|{idx}|{total_chunks}|{crc}|"
+    # Send chunks
+    for i in range(total_packets):
+        start = i * CHUNK_SIZE
+        end = start + CHUNK_SIZE
+        chunk = img_data[start:end]
         
-        # 3. Combine & Base64 Encode
-        payload_bytes = header.encode('utf-8') + chunk_data
-        b64_payload = base64.b64encode(payload_bytes).decode('utf-8')
+        ser.write(chunk)
+        print(f"Sent packet {i+1}/{total_packets}")
 
-        # 4. JSON Wrap
-        msg = {
-            "type": "chunk",
-            "fileid": file_id, # Redundant but helps receiver quick-check
-            "data": b64_payload
-        }
-
-        # 5. Send
-        json_str = json.dumps(msg) + "\n"
-        serial_conn.write(json_str.encode('utf-8'))
+        # FLOW CONTROL: Wait for ESP32 to say it finished transmitting
+        # If we don't wait, we will overflow the ESP32 serial buffer
+        while True:
+            line = ser.readline().strip()
+            if line == b"ACK":
+                break
         
-        print(f"TX Chunk {idx+1}/{total_chunks}")
-        time.sleep(DELAY) # Wait for LoRa to transmit
+        # Small delay to let airwaves clear
+        time.sleep(0.1) 
 
-    print("Done.")
+    print("Transmission Complete")
+    ser.close()
 
-# --- MAIN ---
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python3 sender.py <image_file>")
-        sys.exit(1)
-
-    ser = serial.Serial(PORT, BAUD, timeout=1)
-    
-    # 1. Compress first
-    if compress_image(sys.argv[1], "thumb_ready.jpg"):
-        # 2. Send the compressed file
-        send_file(ser, "thumb_ready.jpg")
+    send_image(IMAGE_PATH)
