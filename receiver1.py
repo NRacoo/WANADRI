@@ -1,4 +1,5 @@
 import serial
+import re
 
 SERIAL_PORT = "/dev/ttyUSB0"
 BAUD_RATE = 115200
@@ -12,7 +13,6 @@ def receive_image():
     expected_size = None
     received = 0
 
-    # pastikan file kosong
     open(OUTPUT_FILE, "wb").close()
 
     while True:
@@ -22,19 +22,28 @@ def receive_image():
 
         buffer += data
 
-        # ===== PARSE HEADER =====
+        # ===== PARSE START HEADER =====
         if expected_size is None:
-            if b"START:" in buffer and b"\n" in buffer:
-                header, buffer = buffer.split(b"\n", 1)
-                header_str = header.decode(errors="ignore")
+            if b"START:" in buffer:
+                idx = buffer.index(b"START:") + len(b"START:")
+                size_bytes = b""
 
-                if header_str.startswith("START:"):
-                    expected_size = int(header_str.replace("START:", ""))
-                    received = 0
+                # ambil digit saja
+                while idx < len(buffer) and buffer[idx:idx+1].isdigit():
+                    size_bytes += buffer[idx:idx+1]
+                    idx += 1
+
+                if size_bytes:
+                    expected_size = int(size_bytes)
                     print(f"[INFO] Expecting {expected_size} bytes")
+
+                    # buang header, sisanya data
+                    buffer = buffer[idx:]
+                    received = 0
                 else:
-                    buffer = b""
-            continue
+                    continue
+            else:
+                continue
 
         # ===== WRITE DATA =====
         if buffer:
