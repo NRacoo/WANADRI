@@ -1,21 +1,18 @@
 /*
-  LilyGo T3 v1.6.1 LoRa Transparent Bridge
-  ----------------------------------------
-  Acts as a serial pipe between Raspberry Pi and LoRa.
+  LilyGo T3 V1 LoRa Bridge (Updated for V1 Pinout)
+  ------------------------------------------------
+  BOARD: TTGO LoRa32-OLED (Select in Arduino IDE)
   
-  1. Data received from Pi (Serial) -> Sent via LoRa
-  2. Data received from LoRa -> Sent to Pi (Serial)
+  WIRING RECAP:
+  - LilyGo Pin 25 <--> Pi Pin 8 (TX)
+  - LilyGo Pin 23 <--> Pi Pin 10 (RX)
+  - LilyGo GND    <--> Pi Pin 6 (GND)
 */
 
 #include <SPI.h>
 #include <LoRa.h>
 
-// ================= CONFIGURATION =================
-// Frequency: 915E6, 868E6, or 433E6 depending on your hardware/region
-// Indonesia usually allows 920-923MHz, but hobby modules often match 433/915.
-#define BAND    433E6 
-
-// Pin Definitions for LilyGo T3 v1.6.1
+// --- HARDWARE CONFIG (Standard T3 V1) ---
 #define SCK     5
 #define MISO    19
 #define MOSI    27
@@ -23,69 +20,67 @@
 #define RST     14
 #define DIO0    26
 
-// UART Pins to Raspberry Pi
-// We use Serial2 (Hardware Serial) for stability
-#define RX_PIN  16  // Connect to Pi TX (GPIO 14)
-#define TX_PIN  17  // Connect to Pi RX (GPIO 15)
-// =================================================
+// --- UART CONFIG (UPDATED) ---
+// We are using IO25 and IO23 because 16/17 are missing on V1
+#define RX_PIN  25  // Connect this to Raspberry Pi TX (Pin 8)
+#define TX_PIN  23  // Connect this to Raspberry Pi RX (Pin 10)
+#define BAUDRATE 115200
+
+// --- LORA CONFIG (UPDATED) ---
+// Your board is 915MHz version.
+#define BAND    915E6 
 
 HardwareSerial SerialPi(2); // Use UART2
 
 void setup() {
-  // 1. Initialize USB Serial (for Debugging only)
+  // 1. Debug Serial (USB to PC)
   Serial.begin(115200);
-  
-  // 2. Initialize UART to Raspberry Pi
-  SerialPi.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);
-  
-  // 3. Initialize LoRa
-  Serial.println("Starting LoRa...");
+  Serial.println("System Init...");
+
+  // 2. Pi Serial (UART to Raspberry Pi)
+  // This tells the ESP32 to route Serial2 to pins 25 and 23
+  SerialPi.begin(BAUDRATE, SERIAL_8N1, RX_PIN, TX_PIN); 
+
+  // 3. LoRa Init
   SPI.begin(SCK, MISO, MOSI, SS);
   LoRa.setPins(SS, RST, DIO0);
-
+  
   if (!LoRa.begin(BAND)) {
-    Serial.println("Starting LoRa failed!");
+    Serial.println("LoRa Init Failed! Check frequency/antenna.");
     while (1);
   }
-  
-  // LoRa Configuration for better range/reliability
-  LoRa.setSpreadingFactor(10); // Higher = Slower but longer range (7-12)
+
+  // Reliability Settings
+  LoRa.setSpreadingFactor(9);
   LoRa.setSignalBandwidth(125E3);
   LoRa.setCodingRate4(5);
-  LoRa.setTxPower(20);         // Max power (20dBm)
-  
-  Serial.println("LoRa Bridge Ready.");
+  LoRa.setTxPower(20);
+
+  Serial.println("LoRa Bridge Active (915MHz).");
+  Serial.println("Connect Pi TX to IO25, Pi RX to IO23.");
 }
 
 void loop() {
-  // TASK A: Forward Data from Pi -> LoRa
+  // TASK A: Pi -> LoRa
   if (SerialPi.available()) {
-    String dataFromPi = SerialPi.readStringUntil('\n');
-    
-    // Only send if not empty
-    if (dataFromPi.length() > 0) {
+    String data = SerialPi.readStringUntil('\n');
+    if (data.length() > 0) {
       LoRa.beginPacket();
-      LoRa.print(dataFromPi);
-      LoRa.print("\n"); // Restore newline for the receiver
+      LoRa.print(data);
+      LoRa.print("\n");
       LoRa.endPacket();
-      
-      Serial.print("TX: "); // Debug info to USB
-      Serial.println(dataFromPi);
+      Serial.println("TX >> " + data); // Show on USB debug
     }
   }
 
-  // TASK B: Forward Data from LoRa -> Pi
+  // TASK B: LoRa -> Pi
   int packetSize = LoRa.parsePacket();
   if (packetSize) {
     String incoming = "";
     while (LoRa.available()) {
       incoming += (char)LoRa.read();
     }
-    
-    // Send to Pi exactly as received
-    SerialPi.print(incoming);
-    
-    Serial.print("RX: "); // Debug info to USB
-    Serial.println(incoming);
+    SerialPi.println(incoming);      // Send to Pi
+    Serial.println("RX << " + incoming); // Show on USB debug
   }
 }
