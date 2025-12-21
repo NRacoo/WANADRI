@@ -1,62 +1,84 @@
 import serial
-import re
+import time
+import os
 
-SERIAL_PORT = "/dev/ttyUSB0"
+# --- Configuration ---
+# On Raspberry Pi 5, the primary GPIO serial is /dev/serial0
+SERIAL_PORT = '/dev/serial0' 
 BAUD_RATE = 115200
-OUTPUT_FILE = "received_image.jpg"
 
-def receive_image():
-    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-    print("[INFO] Listening...")
+def main():
+    try:
+        # Open the GPIO Serial Port
+        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
+        print(f"[System] Receiver active on {SERIAL_PORT} (GPIO UART)")
+        print("[System] Waiting for incoming LoRa transmission...")
+    except Exception as e:
+        print(f"Error opening serial port: {e}")
+        print("Tip: Ensure you enabled 'Hardware Serial' in raspi-config")
+        return
 
     buffer = b""
-    expected_size = None
-    received = 0
-
-    open(OUTPUT_FILE, "wb").close()
+    is_receiving = False
+    start_time = 0
+    
+    # Save received files to a 'downloads' folder
+    if not os.path.exists("downloads"):
+        os.makedirs("downloads")
 
     while True:
-        data = ser.read(ser.in_waiting or 1)
-        if not data:
-            continue
+        try:
+            # Check if data is waiting in the UART buffer
+            if ser.in_waiting:
+                data = ser.read(ser.in_waiting)
+                
+                # --- State Machine: Start of Image ---
+                if b'IMG_START' in data:
+                    print("\n[RX] Header detected! Starting download...")
+                    is_receiving = True
+                    start_time = time.time()
+                    buffer = b"" # Clear buffer for new image
+                    # Clean the data stream by removing the tag
+                    data = data.replace(b'IMG_START', b'')
 
-        buffer += data
-
-        # ===== PARSE START HEADER =====
-        if expected_size is None:
-            if b"START:" in buffer:
-                idx = buffer.index(b"START:") + len(b"START:")
-                size_bytes = b""
-
-                # ambil digit saja
-                while idx < len(buffer) and buffer[idx:idx+1].isdigit():
-                    size_bytes += buffer[idx:idx+1]
-                    idx += 1
-
-                if size_bytes:
-                    expected_size = int(size_bytes)
-                    print(f"[INFO] Expecting {expected_size} bytes")
-
-                    # buang header, sisanya data
-                    buffer = buffer[idx:]
-                    received = 0
-                else:
+                # --- State Machine: End of Image ---
+                if b'IMG_END' in data:
+                    print("\n[RX] Footer detected. Finalizing...")
+                    is_receiving = False
+                    data = data.replace(b'IMG_END', b'')
+                    buffer += data
+                    
+                    # Calculate stats
+                    duration = time.time() - start_time
+                    size_kb = len(buffer) / 1024
+                    
+                    # Save the file
+                    timestamp = int(time.time())
+                    filename = f"downloads/received_{timestamp}.jpg"
+                    
+                    with open(filename, "wb") as f:
+                        f.write(buffer)
+                        
+                    print("-" * 40)
+                    print(f"SUCCESS: Image saved to {filename}")
+                    print(f"Stats: {size_kb:.2f} KB in {duration:.1f} seconds")
+                    print("-" * 40)
+                    
+                    buffer = b"" # Reset
                     continue
-            else:
-                continue
 
-        # ===== WRITE DATA =====
-        if buffer:
-            with open(OUTPUT_FILE, "ab") as f:
-                f.write(buffer)
-            received += len(buffer)
-            buffer = b""
+                # --- State Machine: Accumulating Data ---
+                if is_receiving:
+                    buffer += data
+                    # Print visual feedback (dots) every ~200 bytes
+                    if len(buffer) % 220 == 0:
+                        print(".", end="", flush=True)
 
-            print(f"[RX] {received}/{expected_size} bytes", end="\r")
-
-        if received >= expected_size:
-            print("\n[SUCCESS] Image received completely")
+        except KeyboardInterrupt:
+            print("\n[System] Stopping receiver...")
             break
+        except Exception as e:
+            print(f"\n[Error] {e}")
 
 if __name__ == "__main__":
-    receive_image()
+    main()
