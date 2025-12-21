@@ -5,11 +5,9 @@ import sys
 import os
 
 # --- Configuration ---
-# /dev/serial0 is the default alias for GPIO UART on Pi 5
-SERIAL_PORT = '/dev/ttyAMA0' 
+SERIAL_PORT = '/dev/serial0' 
 BAUD_RATE = 115200
-# Paper specifies splitting data into packets of 220 bytes [cite: 120]
-PACKET_SIZE = 220  
+PACKET_SIZE = 220
 IMAGE_PATH = 'file.jpg'
 
 def process_static_image(filepath):
@@ -17,17 +15,20 @@ def process_static_image(filepath):
         print(f"Error: {filepath} not found.")
         return None
 
-    # Load original image
+    # 1. Load Image (Loads in BGR Color by default)
     img = cv2.imread(filepath)
     if img is None: return None
 
-    # 1. Convert to Grayscale 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    print(f"Original Dimensions: {img.shape}")
+
+    # 2. Resize to 160x120 (Paper limit)
+    # We keep the small resolution to ensure the LoRa transmission 
+    # doesn't take 10+ minutes.
+    resized = cv2.resize(img, (160, 120))
     
-    # 2. Resize to 160x120 
-    resized = cv2.resize(gray, (160, 120))
-    
-    # 3. Compress to JPEG
+    # 3. Compress to JPEG (Color)
+    # Quality 30 is a balance between color detail and file size.
+    # You can lower this to 20 or 15 if transmission is too slow.
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 30] 
     result, encimg = cv2.imencode('.jpg', resized, encode_param)
     
@@ -35,7 +36,7 @@ def process_static_image(filepath):
 
 def send_via_lora(ser, data):
     total_len = len(data)
-    print(f"\n[TX] Sending Image: {total_len} bytes")
+    print(f"\n[TX] Sending Color Image: {total_len} bytes")
     
     # Send Header
     ser.write(b'IMG_START') 
@@ -46,12 +47,12 @@ def send_via_lora(ser, data):
         chunk = data[i:i + PACKET_SIZE]
         ser.write(chunk)
         
-        # Progress Feedback
-        sys.stdout.write(f"\rPacket {i//PACKET_SIZE + 1} sent ({len(chunk)} bytes)")
+        # Progress Bar
+        percent = int((i / total_len) * 100)
+        sys.stdout.write(f"\rProgress: [{('=' * (percent // 5)).ljust(20)}] {percent}%")
         sys.stdout.flush()
         
-        # CRITICAL DELAY: LoRa is slow. 
-        # We must pause to let the ESP32 transmit the air packet.
+        # DELAY: 0.25s is safe. If you see packet loss on receiver, increase to 0.3s
         time.sleep(0.25) 
         
     # Send Footer
@@ -67,7 +68,7 @@ def main():
         jpg_data = process_static_image(IMAGE_PATH)
         
         if jpg_data:
-            print(f"Processed Size: {len(jpg_data)} bytes (160x120 Grayscale)")
+            print(f"Processed Size: {len(jpg_data)} bytes (160x120 Color)")
             while True:
                 cmd = input("Press ENTER to send, 'q' to quit: ")
                 if cmd == 'q': break
