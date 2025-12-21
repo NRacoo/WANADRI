@@ -22,10 +22,9 @@
 
 // --- UART CONFIG (UPDATED) ---
 // We are using IO25 and IO23 because 16/17 are missing on V1
-#define RX_PIN  25  // Connect this to Raspberry Pi TX (Pin 8)
-#define TX_PIN  23  // Connect this to Raspberry Pi RX (Pin 10)
+#define RX_PIN  4   // Connect to Pi TX (Pin 8)
+#define TX_PIN  13  // Connect to Pi RX (Pin 10)
 #define BAUDRATE 115200
-
 // --- LORA CONFIG (UPDATED) ---
 // Your board is 915MHz version.
 #define BAND    915E6 
